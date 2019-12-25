@@ -162,22 +162,31 @@ func (gd *GdaxFetcher) Run() {
 	for {
 		timeEnd := timeStart.Add(gd.baseTimeframe.Duration * 300)
 		lastTime := timeStart
+		retries := int(0)
+	RETRY:
 		for _, symbol := range symbols {
 			params := gdax.GetHistoricRatesParams{
 				Start:       timeStart,
 				End:         timeEnd,
 				Granularity: int(gd.baseTimeframe.Duration.Seconds()),
 			}
-			log.Info("Requesting %s %v - %v", symbol, timeStart, timeEnd)
+			log.Info("Requesting %s %v - %v.  Attempt %d", symbol, timeStart, timeEnd, retries)
 			rates, err := client.GetHistoricRates(symbol, params)
 			if err != nil {
-				log.Info("Response error: %v", err)
-				// including rate limit case
-				time.Sleep(time.Second)
-				continue
+				retries += 1
+				if retries < 10 {
+					backoff := time.Duration(retries * retries) * time.Second
+					log.Info("Response error: %v. Retrying [%d] in %s", err, retries, backoff )
+					// including rate limit case
+					time.Sleep(backoff)
+					goto RETRY
+				} else {
+					log.Warn("Response error: %v. Giving up", err)
+				}
 			}
+			time.Sleep(time.Second) // mandatory sleep
 			if len(rates) == 0 {
-				log.Info("len(rates) == 0")
+				log.Info("No rates data returned.  Skipping %s", symbol)
 				continue
 			}
 			epoch := make([]int64, 0)

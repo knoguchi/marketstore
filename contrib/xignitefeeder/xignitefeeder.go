@@ -26,7 +26,7 @@ func NewBgWorker(conf map[string]interface{}) (bgworker.BgWorker, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, fmt.Sprintf("failed to load config file. %v", conf))
 	}
-	log.Debug("loaded Xignite Feeder config...")
+	log.Info("loaded Xignite Feeder config...")
 
 	// init Xignite API client
 	apiClient := api.NewDefaultAPIClient(config.APIToken, config.Timeout)
@@ -46,17 +46,25 @@ func NewBgWorker(conf map[string]interface{}) (bgworker.BgWorker, error) {
 	sm := symbols.NewManager(apiClient, config.Exchanges, config.IndexGroups)
 	sm.Update()
 	timer.RunEveryDayAt(ctx, config.UpdatingHour, sm.Update)
+	log.Info("updated symbols in the target exchanges")
+
+	// init Quotes Writer & QuotesRange Writer
+	var msqw writer.QuotesWriter = writer.QuotesWriterImpl{
+		MarketStoreWriter: &writer.MarketStoreWriterImpl{},
+		Timeframe:         config.Timeframe,
+		Timezone:          utils.InstanceConfig.Timezone,
+	}
+	var msqrw writer.QuotesRangeWriter = &writer.QuotesRangeWriterImpl{
+		MarketStoreWriter: &writer.MarketStoreWriterImpl{},
+		Timeframe:         config.Backfill.Timeframe,
+	}
 
 	// init QuotesRangeWriter to backfill daily chart data every day
 	if config.Backfill.Enabled {
-		msqrw := &writer.QuotesRangeWriterImpl{
-			MarketStoreWriter: &writer.MarketStoreWriterImpl{},
-			Timeframe:         config.Backfill.Timeframe,
-		}
-
-		bf := feed.NewBackfill(sm, apiClient, msqrw, time.Time(config.Backfill.Since))
+		bf := feed.NewBackfill(sm, apiClient, msqw, msqrw, time.Time(config.Backfill.Since))
 		bf.Update()
 		timer.RunEveryDayAt(ctx, config.UpdatingHour, bf.Update)
+		log.Info("backfilled daily chart in the target exchanges")
 	}
 
 	if config.RecentBackfill.Enabled {
@@ -68,13 +76,6 @@ func NewBgWorker(conf map[string]interface{}) (bgworker.BgWorker, error) {
 		rbf := feed.NewRecentBackfill(sm, timeChecker, apiClient, msbw, config.RecentBackfill.Days)
 		rbf.Update()
 		timer.RunEveryDayAt(ctx, config.UpdatingHour, rbf.Update)
-	}
-
-	// init Quotes Writer
-	var msqw writer.QuotesWriter = writer.QuotesWriterImpl{
-		MarketStoreWriter: &writer.MarketStoreWriterImpl{},
-		Timeframe:         config.Timeframe,
-		Timezone:          utils.InstanceConfig.Timezone,
 	}
 
 	return &feed.Worker{
